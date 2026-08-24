@@ -1,6 +1,8 @@
 # Aster & Row Support Agent
 
-A reliability-focused RAG support agent for Aster & Row (ecommerce: bags, drinkware, travel accessories). Built to handle the four failure modes named in the assignment brief — conflicting policy answers, invented order data, lost conversation context, and unsafe retrieved content — deliberately, not just on the happy path.
+A reliability-focused RAG support agent for Aster & Row, an ecommerce company selling bags, drinkware, and travel accessories. The system combines semantic retrieval, source-authority ranking, tool calling, conversation memory, and deterministic safeguards to deliver accurate, grounded, and traceable support responses.
+
+It is designed to prioritize reliable knowledge retrieval, authoritative sources, accurate order information, contextual conversations, and safe handling of untrusted content, with an evaluation suite used to validate the agent's behavior across realistic support scenarios.
 
 ---
 
@@ -28,7 +30,7 @@ python run.py
 
 ## 2. Environment variables
 
-`.env.example` (no real credentials committed):
+`.env.example` :
 ```
 GROQ_API_KEY=
 GROQ_MODEL=openai/gpt-oss-120b
@@ -36,23 +38,19 @@ EMBEDDING_MODEL=all-MiniLM-L6-v2
 TRACE_LOG_PATH=logs/trace.jsonl
 ```
 
-| Variable | Required | Default | Notes |
-|---|---|---|---|
-| `GROQ_API_KEY` | Yes | — | No fallback; the agent cannot make LLM calls without it. |
-| `GROQ_MODEL` | No | `openai/gpt-oss-120b` | Groq periodically retires model IDs; check `api.groq.com/openai/v1/models` if you get a `model_not_found` error. |
-| `EMBEDDING_MODEL` | No | `all-MiniLM-L6-v2` | Runs locally via `sentence-transformers`, no embedding API cost. |
-| `TRACE_LOG_PATH` | No | `logs/trace.jsonl` | Structured per-turn observability log. |
-
 ## 3. Model, embedding, framework, storage
 
 | Choice | What | Why |
 |---|---|---|
-| **LLM** | Groq-hosted `openai/gpt-oss-120b`, `temperature=0` | Low cost, tool-calling support; temp=0 minimizes (not eliminates) run-to-run phrasing variance. |
+| **LLM** | Groq-hosted `openai/gpt-oss-120b`, `temperature=0` | Low cost, tool-calling support; temp=0 minimizes run-to-run phrasing variance. |
 | **Embeddings** | `sentence-transformers` / `all-MiniLM-L6-v2`, local | No external embedding API, fully offline after first model download, deterministic. |
-| **Framework** | Plain Python, no agent framework | The workflow is one bounded retrieve → generate → tool-call → respond loop, no branching/cycles — a framework (e.g. LangGraph) would add orchestration overhead without solving this system's actual reliability problems (retrieval precedence, tool sanitization, deterministic handoff), which are handled at the code level instead. |
-| **Vector storage** | NumPy array + JSON metadata (`index/vectors.npy`, `index/metadata.json`) | No vector DB per assignment scope; cosine similarity computed directly at query time. |
+| **Framework** | Plain Python, no agent framework | The workflow is one bounded retrieve → generate → tool-call → respond loop |
+| **Vector storage** | NumPy array + JSON metadata (`index/vectors.npy`, `index/metadata.json`) | No vector DB ; cosine similarity computed directly at query time. |
 
 ## 4. Architecture
+
+
+![Architecture](docs/architecture.png)
 
 **Request flow:**
 
@@ -140,14 +138,13 @@ TRACE_LOG_PATH=logs/trace.jsonl
                tool calls, response,
                handoff, errors)
 
-**Key design decision:** several guarantees are enforced in code, not left to prompting alone — privacy (whitelisted `OrderLookupResult` schema), source authority (hard `filter_citable` gate), and handoff-on-injection/abstention (deterministic regex backstops under the LLM's own judgment). Prompting alone was measurably less reliable for these — see bug diary.
 
 ### File map
 
 | File | Role |
 |---|---|
 | `app/ingest/loader.py` | Parses KB markdown + YAML front matter into `Document` objects. |
-| `app/ingest/chunker.py` | Splits documents by `##` heading; prepends doc title + heading to chunk text before embedding (contextual chunking — see bug diary #2). |
+| `app/ingest/chunker.py` | Splits documents by `##` heading; prepends doc title + heading to chunk text before embedding. |
 | `app/ingest/build_index.py` | Loads, chunks, embeds, and persists the full KB index. |
 | `app/retrieval/embedder.py` | Wraps `sentence-transformers` for batch (index-build) and single-query embedding. |
 | `app/retrieval/store.py` | NumPy-backed vector store; cosine similarity top-k query. |
@@ -170,7 +167,7 @@ python -m evaluation.run_eval --visible-only # supplied visible-cases.json only
 python -m evaluation.run_eval --verbose      # show answer text for passing cases too
 ```
 
-Assertions are deterministic wherever practical: `tool` / `tool_arguments` (exact tool call + order ID), `required_sources` / `forbidden_sources_as_authority` (exact filename match), `must_not_include` (forbidden content -- leaked PII, invented data), `handoff` (exact boolean). `must_include_concepts` is the one intentionally softer check, since the assignment states exact wording isn't required -- matched via phrase-family heuristics, documented as such in `run_eval.py`'s own docstring.
+
 
 ## 6. Baseline and final evaluation results
 
@@ -190,7 +187,7 @@ Assertions are deterministic wherever practical: `tool` / `tool_arguments` (exac
 | source-conflict | 0/2 |
 | **TOTAL** | **1/21** |
 
-*(This early run coincided with a scope bug -- see bug diary #1 -- causing nearly every turn to fail identically via the API-error fallback path, which is itself part of why that bug was easy to detect: a single root cause producing a near-total failure signature.)*
+
 
 **Final** -- after all fixes below, run against all 15 supplied visible cases + all 6 original custom cases:
 
@@ -210,46 +207,74 @@ Assertions are deterministic wherever practical: `tool` / `tool_arguments` (exac
 
 *(A 7th custom multi-turn case was added afterward and is not included in this total -- see Known Limitations for a note on generation-side variance across repeated runs.)*
 
-## 7. Bug diary
+## 7. Bug Diary
 
-### Bug 1 -- Crash: `UnboundLocalError` on a conditionally-assigned handoff variable
-- **Reproduced by:** running the full eval suite; nearly every case failed identically via the generic "trouble reaching the support system" fallback.
-- **Root cause:** a variable (`damaged_item_request`) was only assigned inside an `if return_approval_request:` block but referenced unconditionally later in the same function. Python treats any variable assigned anywhere in a function as local to the whole function, so the reference raised `UnboundLocalError` whenever that `if` didn't run -- i.e. almost every turn.
-- **Fix:** reverted to a small set of always-defined, unconditionally-computed deterministic backstops (`prompt_extraction_attempt`, `tool_forced_handoff`, `abstention_detected`) rather than several conditionally-assigned heuristics layered on top of each other.
-- **Regression test:** the full eval suite itself -- a scope bug like this produces a near-total, identically-shaped failure across every case, which made it fast to catch and characterize.
+### Bug 1 — Supporting source was not cited when another source was sufficient
 
-### Bug 2 -- Retrieval-recall gap: section headings excluded from embeddings
-- **Reproduced by:** `canada-multiturn` consistently omitted the duties/taxes disclosure across multiple runs, despite the source content existing in the KB.
-- **Root cause:** `build_index.py` only embedded `chunk.text` (the section body); the heading itself -- though shown to the LLM in the final citation -- was never part of the embedded vector. A short, keyword-light section (`## Duties and taxes`, body text never says "Canada") scored too low to reliably reach top-k on Canada-focused queries.
-- **Fix:** `chunker.py` now prepends `"{doc_title} - {heading}"` to each chunk's text before embedding (contextual chunking).
-- **Regression test:** confirmed via a trace-log score diff before/after rebuild -- the duties/taxes chunk's retrieval score rose from 0.313 to 0.324 and reliably entered the top-8 context afterward; the delivery answer began consistently including the duties disclosure.
+**Reproduced by:** the final-sale-damaged-exception evaluation case. The answer was correctly grounded, but the model cited only the source it directly relied on even though both 03-final-sale-and-promotions.md and 04-damaged-or-wrong-items.md contained relevant supporting information.
+**Root cause:** the LLM treated citations as the sources used to formulate the answer rather than all relevant authoritative sources retrieved for the answer. Since one document was sufficient to answer the question, it omitted the other supporting source.
+**Fix:** strengthened the system prompt to require citation of every relevant authoritative source retrieved for the answer, even when one source alone is sufficient. This separates answer correctness from citation completeness.
+**Regression test:** reran final-sale-damaged-exception and verified that the response cites the relevant sections from both final-sale and damaged/wrong-item policies while still giving the correct 7-calendar-day requirement.
 
-### Bug 3 -- Tool-result authority silently overridden by co-retrieved KB content
-- **Reproduced by:** a custom multi-turn case asking about a specific order with a null delivery estimate; the agent's answer stated a general "5-9 business days" range sourced from KB shipping policy instead of reporting the order's actual (unavailable) estimate.
-- **Root cause:** when a query mentions shipping/Canada, KB retrieval pulls in the general shipping-policy chunk *in the same turn* as the order-lookup tool call. Nothing told the model that a specific order's tool result should take precedence over a general policy estimate when the two conflict on the same fact.
-- **Fix:** added an explicit prompt rule stating tool-result fields are authoritative for the specific order in question, and a general KB delivery-time range must not be substituted when the tool's own estimate is null.
-- **Regression test:** custom case asserting `must_not_invent: ["arrival date"]` and requiring the "delivery estimate is unavailable" concept -- discovered independently of the supplied visible cases.
+### Bug 2 — Retrieval missed relevant sections
 
-### Bug 4 -- Deterministic abstention backstop misfired on tool-result gaps
-- **Reproduced by:** a custom prompt-injection case (asking about a coupon on a specific order) was force-flagged `handoff=True` when it should have been `False` -- the agent correctly reported no coupon existed, but a keyword backstop misread that as a KB-insufficiency abstention.
-- **Root cause:** the abstention backstop matched on phrases like "does not include details," which also fires when a tool result legitimately lacks one field -- an unrelated situation to genuine KB abstention.
-- **Fix:** scoped the backstop to only fire when no tool was called that turn, since genuine KB-abstention and tool-result reporting are mutually exclusive in this system.
-- **Regression test:** the custom case's `handoff: false` assertion.
+- **Reproduced:** `canada-multiturn` repeatedly missed the duties/taxes disclosure even though it existed in the KB.
+- **Cause:** Embeddings used only `chunk.text`; section headings were excluded, so short sections such as `Duties and taxes` were difficult to retrieve.
+- **Fix:** Added document title + section heading to the text used for embedding.
+- **Test:** Rebuilt the index and compared trace scores. The duties/taxes chunk improved from `0.313 → 0.324` and consistently entered the top-8 context.
 
-## 8. Known limitations and planned improvements
+### Bug 3 — KB content overrode tool results
 
-- **Generation-side non-determinism.** `temperature=0` on a shared Groq endpoint reduces but doesn't eliminate phrasing variance between identical runs -- proven via trace-log diffing that retrieval/chunking/embedding are fully deterministic while generation isn't. *Improvement:* evaluate a dedicated-capacity or self-hosted endpoint if strict consistency is required in production.
-- **KB content duplication.** Two documents (`03-final-sale-and-promotions.md`, `04-damaged-or-wrong-items.md`) both independently state the same final-sale/damage-review fact, so citation completeness can vary by which document the model draws from. *Improvement:* de-duplicate the source KB directly rather than relying on a prompt instruction to cite all supporting sources.
-- **Transient API failures.** Groq calls occasionally fail even after 2 retries with backoff; the orchestrator falls back to a safe "contact support" message with forced handoff rather than crashing. *Improvement:* add a circuit breaker and/or a fallback model for production resilience.
-- **Single-round tool calling.** No support for chained/conditional tool calls within one turn. *Improvement:* only needed if future tools require multi-step orchestration -- out of scope for the current single-tool design.
-- **Unbounded session history.** `SessionStore` never trims or summarizes. *Improvement:* token-budget-aware truncation or summarization before production use with long-running conversations.
-- **Malformed order IDs don't force handoff.** A structurally invalid ID (e.g. missing hyphen) is treated as "please recheck the format," not escalated. *Improvement:* explicit product sign-off on whether this should also trigger handoff.
+- **Reproduced:** An order with no delivery estimate received a generic KB delivery-time range instead.
+- **Cause:** The model had both the specific order-tool result and general shipping-policy content, with no explicit precedence rule.
+- **Fix:** Added a prompt rule: **specific tool results are authoritative for the order; never substitute a general KB estimate when the tool value is unavailable.**
+- **Test:** Custom eval required no invented arrival date and required the “delivery estimate unavailable” response.
 
-## 9. AI coding tools used
+### Bug 4 — Abstention backstop caused false handoffs
 
-Built with Claude (Anthropic) throughout, used for: reviewing each module against the assignment's stated requirements, diagnosing eval failures against real trace-log evidence rather than guesses, writing and revising the fixes described above, and drafting this README.
+- **Reproduced:** A custom order/coupon case incorrectly returned `handoff=True` even though the agent correctly handled the tool result.
+- **Cause:** The abstention heuristic interpreted missing fields in a valid tool result as insufficient KB information.
+- **Fix:** Scoped the KB-abstention backstop so it does not trigger when a tool was successfully called.
+- **Test:** Custom regression case confirmed `handoff=False`.
 
-**Example of a wrong AI suggestion that was corrected through debate:** early on, when the `genuine-active-source-conflict` case's retrieved chunk-count grew from 5 to 8 after fixing conflict detection in `rank.py`, Claude's first hypothesis for a later vegan-question failure was that the same conflict-detection change was padding retrieval with irrelevant chunks (a shipping and a product-card chunk showing up for an unrelated materials question), and suggested raising the `min_score` threshold in `detect_conflict` to fix it. Before applying that, I pushed back and asked to actually check the retrieval scores rather than assume -- pulling the real trace-log scores showed the chunks were near the threshold but the deeper issue was unrelated to conflict detection at all. Continuing to investigate rather than accepting the first plausible explanation led to the real fix later (the heading-embedding gap in Bug 2), which had nothing to do with `min_score`. That exchange is why the workflow throughout this project was "verify against trace-log evidence before changing code," not "accept the first explanation" -- several proposed fixes were revised or rejected this way before landing on the actual root cause.
+## 8. Known Limitations
+
+- **Generation variance:** `temperature=0` reduces but does not eliminate output variation on the shared Groq endpoint.  
+  **Improvement:** Use dedicated/self-hosted inference for strict consistency.
+
+- **Exact-phrase evaluation sensitivity:** The agent can produce a correct, well-grounded answer that is semantically equivalent to the expected response but still fail an evaluation when the case checks for a specific phrase or wording. This is a limitation of the current heuristic-based evaluation rather than the underlying answer quality. 
+**Improvement:** Use semantic matching or concept-level assertions alongside exact-phrase checks.
+
+- **Transient API failures:** Groq requests can still fail after retries.  
+  **Improvement:** Add a circuit breaker and/or fallback model.
+
+- **Single-round tool calling:** The agent currently supports one tool-calling round per turn.  
+  **Improvement:** Add multi-step tool orchestration if future tools require it.
+
+- **Unbounded session history:** Conversation history is not currently summarized or truncated.  
+  **Improvement:** Add token-aware history truncation/summarization.
+
+- **Malformed order IDs:** Invalid IDs are treated as formatting issues rather than automatic escalation.  
+  **Improvement:** Confirm whether malformed IDs should trigger handoff.
+
+## 9. AI Coding Tools Used
+
+Used Claude and ChatGPT throughout the project for:
+
+- Reviewing modules against the assignment requirements.
+- Diagnosing evaluation failures using trace logs and test evidence.
+- Writing and revising implementation fixes.
+- Refining the README.
+
+### Example of a Corrected AI Suggestion
+
+During debugging, Claude initially suggested that increased retrieval results were caused by the conflict-detection threshold and recommended changing `min_score`.
+
+Instead of applying the change immediately, the retrieval scores were checked against the trace logs. The evidence showed that conflict detection was not the root cause. The actual issue was the **heading-embedding gap** described in Bug 2.
+
+This reinforced the project's debugging approach:
+
+> **Verify against trace-log and evaluation evidence before changing code.**
 
 ## 10. Demo
 
