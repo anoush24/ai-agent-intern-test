@@ -1,0 +1,10 @@
+groq
+chromadb
+sentence-transformers
+pydantic>=2
+python-frontmatter
+python-dotenv
+pytest
+typer
+pyyaml
+numpy
