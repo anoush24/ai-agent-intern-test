@@ -52,92 +52,6 @@ TRACE_LOG_PATH=logs/trace.jsonl
 
 ![Architecture](docs/architecture.png)
 
-**Request flow:**
-
-                              USER
-                               |
-                               v
-                     +--------------------+
-                     | orchestrator.py    |
-                     | (app/agents/)      |
-                     +---------+----------+
-                               |
-                 +-------------+-------------+
-                 |                           |
-                 v                           v
-          Knowledge Query               Order Query
-        (retrieval needed)          (order ID present)
-                 |                           |
-                 v                           v
-      +--------------------+       +----------------------+
-      | store.py + rank.py |       | order_lookup.py       |
-      | (app/retrieval/)   |       | (app/tools/)           |
-      +---------+----------+       +----------+-------------+
-                |                             |
-                v                             v
-      index/vectors.npy               data/orders.json
-      index/metadata.json             (whitelisted fields
-      (built by                        only -- no email,
-      ingest/build_index.py)           address, internal
-                |                       notes, risk score)
-                |                             |
-                +-------------+---------------+
-                              |
-                              v
-                +---------------------------+
-                | orchestrator.py            |
-                | builds tagged context /    |
-                | sanitized tool result      |
-                +-------------+---------------+
-                              |
-                              v
-                    Groq LLM call
-                  (openai/gpt-oss-120b,
-                    temperature=0,
-                    tool_schema.py)
-                              |
-                              v
-              +----------------------------+
-              | orchestrator.py            |
-              | footer parse + guardrails  |
-              +--------------+--------------+
-                              |
-             +----------------+----------------+
-             |                                 |
-             v                                 v
-     LLM footer                     Deterministic backstops
-   (HANDOFF / SOURCES)              (regex on user message +
-             |                       answer text: prompt-
-             |                       extraction attempt,
-             |                       abstention language,
-             |                       tool handoff_required)
-             |                                 |
-             +----------------+----------------+
-                              |
-                              v
-                      Final HANDOFF decision
-                       (OR of both signals)
-                              |
-                              v
-                       Final Response
-                              |
-                     +--------+--------+
-                     |                 |
-                     v                 v
-                  Sources        Handoff flag
-              (file#heading,     (yes/no, shown
-               or NONE for       to customer)
-               tool answers)
-                              |
-                              v
-                 observability/tracer.py
-              writes full trace to
-              logs/trace.jsonl
-              (message, history,
-               retrieved chunks + scores,
-               tool calls, response,
-               handoff, errors)
-
 
 ### File map
 
@@ -175,7 +89,7 @@ python -m evaluation.run_eval --verbose      # show answer text for passing case
 
 | Category | Passed |
 |---|---|
-| retrieval | 0/2 |
+| retrieval | 1/2 |
 | groundedness | 0/2 |
 | multi-source-grounding | 0/1 |
 | conversation | 0/1 |
@@ -185,7 +99,7 @@ python -m evaluation.run_eval --verbose      # show answer text for passing case
 | prompt-security | 0/3 |
 | abstention | 0/1 |
 | source-conflict | 0/2 |
-| **TOTAL** | **1/21** |
+| **TOTAL** | **2/21** |
 
 
 
@@ -205,7 +119,7 @@ python -m evaluation.run_eval --verbose      # show answer text for passing case
 | source-conflict | 2/2 |
 | **TOTAL** | **21/21** |
 
-*(A 7th custom multi-turn case was added afterward and is not included in this total -- see Known Limitations for a note on generation-side variance across repeated runs.)*
+![Screenshot](docs/evalpass.png)
 
 ## 7. Bug Diary
 
@@ -278,8 +192,12 @@ This reinforced the project's debugging approach:
 
 ## 10. Demo
 
-*(Embed a 2-4 minute GIF or linked video here, showing: one KB citation question, one order lookup, one multi-turn conversation, one abstention/handoff case, and the eval suite running.)*
+ 🎥 Demo Video: https://drive.google.com/drive/folders/1LuIPnrR54TwwoV1HK9Kwocal8SwStqMi?usp=sharing
 
-```markdown
-![Demo](./demo.gif)
-```
+The demo demonstrates:
+
+- One knowledge-base question with citations.
+- One order lookup.
+- One multi-turn conversation.
+- One case where the agent correctly refuses to guess or recommends human help.
+- The evaluation suite running (21/21 cases passed).
