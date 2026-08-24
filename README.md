@@ -56,60 +56,89 @@ TRACE_LOG_PATH=logs/trace.jsonl
 
 **Request flow:**
 
-```
-User message
-   |
-   v
-[ retrieval/store.py ]
-  ChunkStore.query() -- cosine similarity over
-  locally-embedded KB chunks
-   |
-   v
-[ retrieval/rank.py ]
-  - authority re-rank (active > superseded > draft)
-  - hard filter: official + active + customer-facing only
-  - candidate-conflict detection across different
-    active/official documents
-   |
-   v
-[ agents/orchestrator.py ]
-  builds [file#heading] + [CANDIDATE CONFLICT]
-  tagged context block, untrusted-data framed
-   |
-   v
-  Groq LLM call (temp=0, tools enabled)
-   |
-   +---------------------+
-   | tool_calls present? |
-   +----------+----------+
-              |
-     yes -----+----- no
-      |               |
-      v               v
-[ tools/order_lookup.py ]   straight to answer
-  whitelisted fields only --
-  internal notes, email,
-  address, risk score are
-  structurally unreachable
-      |
-      v
-  second LLM call with sanitized tool result
-      |
-      v
-[ orchestrator.py -- footer parse + backstops ]
-  - HANDOFF / SOURCES footer parsed from LLM
-  - deterministic overrides layered on top:
-      * system-prompt-extraction attempt (regex
-        on user message)
-      * abstention language + no tool called
-      * tool result flagged handoff_required
-        (e.g. status=exception, not found)
-      |
-      v
-  response + full trace log entry
-  (agents/session.py keeps per-session history;
-   observability/tracer.py writes JSONL)
-```
+                              USER
+                               |
+                               v
+                     +--------------------+
+                     | orchestrator.py    |
+                     | (app/agents/)      |
+                     +---------+----------+
+                               |
+                 +-------------+-------------+
+                 |                           |
+                 v                           v
+          Knowledge Query               Order Query
+        (retrieval needed)          (order ID present)
+                 |                           |
+                 v                           v
+      +--------------------+       +----------------------+
+      | store.py + rank.py |       | order_lookup.py       |
+      | (app/retrieval/)   |       | (app/tools/)           |
+      +---------+----------+       +----------+-------------+
+                |                             |
+                v                             v
+      index/vectors.npy               data/orders.json
+      index/metadata.json             (whitelisted fields
+      (built by                        only -- no email,
+      ingest/build_index.py)           address, internal
+                |                       notes, risk score)
+                |                             |
+                +-------------+---------------+
+                              |
+                              v
+                +---------------------------+
+                | orchestrator.py            |
+                | builds tagged context /    |
+                | sanitized tool result      |
+                +-------------+---------------+
+                              |
+                              v
+                    Groq LLM call
+                  (openai/gpt-oss-120b,
+                    temperature=0,
+                    tool_schema.py)
+                              |
+                              v
+              +----------------------------+
+              | orchestrator.py            |
+              | footer parse + guardrails  |
+              +--------------+--------------+
+                              |
+             +----------------+----------------+
+             |                                 |
+             v                                 v
+     LLM footer                     Deterministic backstops
+   (HANDOFF / SOURCES)              (regex on user message +
+             |                       answer text: prompt-
+             |                       extraction attempt,
+             |                       abstention language,
+             |                       tool handoff_required)
+             |                                 |
+             +----------------+----------------+
+                              |
+                              v
+                      Final HANDOFF decision
+                       (OR of both signals)
+                              |
+                              v
+                       Final Response
+                              |
+                     +--------+--------+
+                     |                 |
+                     v                 v
+                  Sources        Handoff flag
+              (file#heading,     (yes/no, shown
+               or NONE for       to customer)
+               tool answers)
+                              |
+                              v
+                 observability/tracer.py
+              writes full trace to
+              logs/trace.jsonl
+              (message, history,
+               retrieved chunks + scores,
+               tool calls, response,
+               handoff, errors)
 
 **Key design decision:** several guarantees are enforced in code, not left to prompting alone — privacy (whitelisted `OrderLookupResult` schema), source authority (hard `filter_citable` gate), and handoff-on-injection/abstention (deterministic regex backstops under the LLM's own judgment). Prompting alone was measurably less reliable for these — see bug diary.
 
