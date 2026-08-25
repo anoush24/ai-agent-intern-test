@@ -124,5 +124,6 @@
   },
   "note": "Tests tool-result context carrying across turns, distinct from canada-multiturn's policy-context carryover in visible-cases.json. The second-turn message alone has no order ID - if the agent loses context, it would either wrongly re-ask for the order ID (caught by must_not_include) or invent a delivery date the tool never provided (caught by must_not_invent)."
 }
+    
   ]
 }

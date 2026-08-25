@@ -119,17 +119,20 @@ python -m evaluation.run_eval --verbose      # show answer text for passing case
 | source-conflict | 2/2 |
 | **TOTAL** | **21/21** |
 
-## Screenshot
+> **Note on reproducibility:** the final 21/21 result was achieved consistently across most runs, but on any given run some of the above may occasionally fail due to LLM phrasing variance rather than a logic defect - see Known Limitations 2.
+
+### Screenshot
+
 ![Screenshot](docs/evalpass.png)
 
 ## 7. Bug Diary
 
 ### Bug 1 — Supporting source was not cited when another source was sufficient
 
-**Reproduced by:** the final-sale-damaged-exception evaluation case. The answer was correctly grounded, but the model cited only the source it directly relied on even though both 03-final-sale-and-promotions.md and 04-damaged-or-wrong-items.md contained relevant supporting information.
-**Root cause:** the LLM treated citations as the sources used to formulate the answer rather than all relevant authoritative sources retrieved for the answer. Since one document was sufficient to answer the question, it omitted the other supporting source.
-**Fix:** strengthened the system prompt to require citation of every relevant authoritative source retrieved for the answer, even when one source alone is sufficient. This separates answer correctness from citation completeness.
-**Regression test:** reran final-sale-damaged-exception and verified that the response cites the relevant sections from both final-sale and damaged/wrong-item policies while still giving the correct 7-calendar-day requirement.
+- **Reproduced:** the final-sale-damaged-exception evaluation case. The answer was correctly grounded, but the model cited only the source it directly relied on even though both 03-final-sale-and-promotions.md and 04-damaged-or-wrong-items.md contained relevant supporting information.
+- **Cause:** the LLM treated citations as the sources used to formulate the answer rather than all relevant authoritative sources retrieved for the answer. Since one document was sufficient to answer the question, it omitted the other supporting source.
+- **Fix:** strengthened the system prompt to require citation of every relevant authoritative source retrieved for the answer, even when one source alone is sufficient. This separates answer correctness from citation completeness.
+- **Regression test:** reran final-sale-damaged-exception and verified that the response cites the relevant sections from both final-sale and damaged/wrong-item policies while still giving the correct 7-calendar-day requirement.
 
 ### Bug 2 — Retrieval missed relevant sections
 
@@ -154,23 +157,26 @@ python -m evaluation.run_eval --verbose      # show answer text for passing case
 
 ## 8. Known Limitations
 
-- **Generation variance:** `temperature=0` reduces but does not eliminate output variation on the shared Groq endpoint.  
+- **1.Generation variance:** `temperature=0` reduces but does not eliminate output variation on the shared Groq endpoint.  
   **Improvement:** Use dedicated/self-hosted inference for strict consistency.
 
-- **Exact-phrase evaluation sensitivity:** The agent can produce a correct, well-grounded answer that is semantically equivalent to the expected response but still fail an evaluation when the case checks for a specific phrase or wording. This is a limitation of the current heuristic-based evaluation rather than the underlying answer quality. 
+- **2.Exact-phrase evaluation sensitivity:** The agent can produce a correct, well-grounded answer that is semantically equivalent to the expected response but still fail an evaluation when the case checks for a specific phrase or wording. This is a limitation of the current heuristic-based evaluation rather than the underlying answer quality. 
 **Improvement:** Use semantic matching or concept-level assertions alongside exact-phrase checks.
 
-- **Transient API failures:** Groq requests can still fail after retries.  
+- **3.Transient API failures:** Groq requests can still fail after retries.  
   **Improvement:** Add a circuit breaker and/or fallback model.
 
-- **Single-round tool calling:** The agent currently supports one tool-calling round per turn.  
+- **4.Single-round tool calling:** The agent currently supports one tool-calling round per turn.  
   **Improvement:** Add multi-step tool orchestration if future tools require it.
 
-- **Unbounded session history:** Conversation history is not currently summarized or truncated.  
+- **5.Unbounded session history:** Conversation history is not currently summarized or truncated.  
   **Improvement:** Add token-aware history truncation/summarization.
 
-- **Malformed order IDs:** Invalid IDs are treated as formatting issues rather than automatic escalation.  
+- **6.Malformed order IDs:** Invalid IDs are treated as formatting issues rather than automatic escalation.  
   **Improvement:** Confirm whether malformed IDs should trigger handoff.
+
+- **7.LLM API quota:** Development and evaluation were performed using Groq's Free Tier, which is subject to request and token rate limits. Repeated evaluation runs could therefore exhaust the available quota and temporarily prevent further API calls.
+  **Improvement:** A production deployment would use a dedicated paid-tier configuration with appropriate rate limits, usage monitoring, and fallback handling.  
 
 ## 9. AI Coding Tools Used
 
