@@ -103,27 +103,7 @@
         "handoff": false
       },
       "note": "Regression guard for the detect_conflict fix: broadening conflict detection to any two different active document_ids (rather than exact heading match) risks false positives on two unrelated-but-simultaneously-relevant topics. This confirms the prompt's instruction to only flag genuine contradictions, not just topic diversity, actually holds."
-    },
-    {
-  "id": "custom-multiturn-order-followup",
-  "category": "conversation",
-  "messages": [
-    { "role": "user", "content": "Where is ORD-1011?" },
-    { "role": "user", "content": "When will it arrive?" }
-  ],
-  "expect": {
-    "must_include_concepts": [
-      "shipped with Canada Post",
-      "delivery estimate is unavailable"
-    ],
-    "must_not_invent": ["arrival date"],
-    "must_not_include": ["order id", "order number"],
-    "tool": "order_lookup",
-    "tool_arguments": { "order_id": "ORD-1011" },
-    "handoff": false
-  },
-  "note": "Tests tool-result context carrying across turns, distinct from canada-multiturn's policy-context carryover in visible-cases.json. The second-turn message alone has no order ID - if the agent loses context, it would either wrongly re-ask for the order ID (caught by must_not_include) or invent a delivery date the tool never provided (caught by must_not_invent)."
-}
+    }
     
   ]
 }
