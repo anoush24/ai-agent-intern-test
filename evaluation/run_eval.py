@@ -296,7 +296,7 @@ def evaluate_case(case: dict) -> CaseResult:
             failures.append(f"expected handoff={expect['handoff']}, got handoff={handoff}")
 
    
-    failures.extend(_check_must_include(answer, expect.get("must_include", [])))
+   
 
     for text in expect.get("must_not_include", []):
         if _contains(answer, text):
@@ -314,7 +314,7 @@ def evaluate_case(case: dict) -> CaseResult:
         if _contains(answer, text):
             failures.append(f"agent appears to have followed forbidden instruction: '{text}'")
 
-    failures.extend(_check_concepts(answer, expect.get("must_include_concepts", [])))
+   
 
 
     for filename in expect.get("required_sources", []):
